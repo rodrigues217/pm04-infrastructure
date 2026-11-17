@@ -1,0 +1,78 @@
+name: Preparar ferramentas
+description: Credenciais AWS, chave SSH, backend do Terraform (init) e, opcionalmente, Ansible.
+
+inputs:
+  environment:
+    description: dev | homolog | prod
+    required: true
+  aws-region:
+    required: true
+  aws-access-key-id:
+    required: true
+  aws-secret-access-key:
+    required: true
+  aws-session-token:
+    description: "Necessário só para credenciais temporárias (ex.: AWS Academy Learner Lab)."
+    required: false
+    default: ""
+  ssh-private-key:
+    required: true
+  with-ansible:
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Configurar credenciais AWS (GitHub Secrets)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-region: ${{ inputs.aws-region }}
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-session-token: ${{ inputs.aws-session-token }}
+
+    - name: Instalar chave SSH do deploy
+      shell: bash
+      env:
+        SSH_PRIVATE_KEY: ${{ inputs.ssh-private-key }}
+      run: |
+        install -m 700 -d ~/.ssh
+        printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/kubeshop
+        chmod 600 ~/.ssh/kubeshop
+        # A chave pública é derivada da privada: só um secret para manter.
+        echo "TF_VAR_ssh_public_key=$(ssh-keygen -y -f ~/.ssh/kubeshop)" >> "$GITHUB_ENV"
+        echo "SSH_KEY_FILE=$HOME/.ssh/kubeshop" >> "$GITHUB_ENV"
+
+    - name: Garantir buckets de state e de backup
+      shell: bash
+      run: bash scripts/bootstrap-backend.sh
+
+    - name: Instalar Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: "1.12.2"
+        terraform_wrapper: false
+
+    - name: terraform init (state remoto por ambiente)
+      shell: bash
+      working-directory: terraform
+      run: |
+        terraform init -input=false \
+          -backend-config="bucket=${TF_STATE_BUCKET}" \
+          -backend-config="key=kubeshop/${{ inputs.environment }}/terraform.tfstate" \
+          -backend-config="region=${{ inputs.aws-region }}"
+
+    - name: Instalar Python
+      if: inputs.with-ansible == 'true'
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Instalar Ansible e coleções
+      if: inputs.with-ansible == 'true'
+      shell: bash
+      run: |
+        pip install --quiet "ansible-core>=2.17,<2.19"
+        ansible-galaxy collection install -r ansible/requirements.yml
+        ansible --version | head -1

@@ -1,0 +1,294 @@
+name: Infra KubeShop - deploy (Terraform + Ansible)
+
+# Execução manual com parâmetros (PM-04, seção 4).
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "plan = só mostra o que mudaria | apply = cria/atualiza | destroy = remove o ambiente"
+        type: choice
+        options: [apply, plan, destroy]
+        default: apply
+      environment:
+        description: Ambiente de destino
+        type: choice
+        options: [dev, homolog, prod]
+        default: dev
+      instance_name:
+        description: Prefixo do nome das VMs (muda só a tag Name)
+        type: string
+        default: vm-pm04
+      instance_type:
+        description: Tipo da VM da aplicação
+        type: choice
+        options: [t3.micro, t3.small, t3.medium]
+        default: t3.micro
+      # (O tipo da VM do banco fica na variável de repositório DB_INSTANCE_TYPE,
+      #  para manter o formulário com no máximo 10 parâmetros.)
+      docker_image:
+        description: "Registro/namespace das imagens (vazio = ghcr.io/<dono do repositório>)"
+        type: string
+        default: ""
+      docker_tag:
+        description: Tag das imagens kubeshop-api e kubeshop-frontend (ex. 1.0.0)
+        type: string
+        default: "1.0.0"
+      pull_images:
+        description: Forçar download da tag (necessário para tags mutáveis como latest)
+        type: boolean
+        default: false
+      update_os:
+        description: Aplicar atualizações do sistema operacional
+        type: boolean
+        default: false
+      extra_packages:
+        description: Pacotes adicionais, separados por vírgula
+        type: string
+        default: "curl, git, unzip"
+      confirm_destroy:
+        description: "Para destroy, digite o nome do ambiente (ex.: dev)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+# Uma execução por ambiente por vez; a próxima espera (não cancela) a atual.
+concurrency:
+  group: kubeshop-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+  TF_VAR_environment: ${{ inputs.environment }}
+  TF_VAR_instance_name: ${{ inputs.instance_name }}
+  TF_VAR_app_instance_type: ${{ inputs.instance_type }}
+  TF_VAR_db_instance_type: ${{ vars.DB_INSTANCE_TYPE || 't3.micro' }}
+  TF_VAR_admin_cidrs: ${{ vars.ADMIN_CIDRS || '[]' }}
+  TF_VAR_enable_nat_gateway: ${{ vars.ENABLE_NAT_GATEWAY || 'false' }}
+  ANSIBLE_FORCE_COLOR: "true"
+
+jobs:
+  # ------------------------------------------------------------------ 1. Terraform
+  terraform:
+    name: "Terraform (${{ inputs.action }} - ${{ inputs.environment }})"
+    if: inputs.action != 'destroy'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preparar ferramentas
+        uses: ./.github/actions/setup
+        with:
+          environment: ${{ inputs.environment }}
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          with-ansible: "false"
+
+      - name: Validar formatação e sintaxe
+        working-directory: terraform
+        run: |
+          terraform fmt -check -recursive -diff
+          terraform validate -no-color
+
+      - name: terraform plan
+        id: plan
+        working-directory: terraform
+        run: |
+          set +e
+          terraform plan -no-color -detailed-exitcode -out=tfplan | tee plan.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          # 0 = sem mudanças | 1 = erro | 2 = há mudanças
+          if [ "$code" -eq 1 ]; then echo "::error::terraform plan falhou"; exit 1; fi
+          if [ "$code" -eq 2 ]; then echo "has_changes=true" >> "$GITHUB_OUTPUT"; else echo "has_changes=false" >> "$GITHUB_OUTPUT"; fi
+          {
+            echo "## Terraform plan - ${{ inputs.environment }}"
+            echo
+            if [ "$code" -eq 0 ]; then
+              echo "**Sem alterações**: a infraestrutura já corresponde ao código."
+            else
+              echo '```'
+              grep -E '^\s+# |^Plan:' plan.txt || true
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: terraform apply
+        if: inputs.action == 'apply' && steps.plan.outputs.has_changes == 'true'
+        working-directory: terraform
+        run: terraform apply -no-color -auto-approve tfplan
+
+      - name: Outputs
+        if: inputs.action == 'apply'
+        working-directory: terraform
+        run: |
+          terraform output
+          {
+            echo "## Infraestrutura"
+            echo '```'
+            terraform output -no-color summary
+            echo '```'
+            echo "Loja: $(terraform output -raw store_url)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------ 2. Ansible
+  ansible:
+    name: "Ansible (configuração - ${{ inputs.environment }})"
+    needs: terraform
+    if: inputs.action == 'apply'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      MONGO_ROOT_PASSWORD: ${{ secrets.MONGO_ROOT_PASSWORD }}
+      MONGO_APP_PASSWORD: ${{ secrets.MONGO_APP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preparar ferramentas
+        uses: ./.github/actions/setup
+        with:
+          environment: ${{ inputs.environment }}
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Gerar inventário a partir dos outputs do Terraform
+        run: |
+          bash scripts/gerar-inventario.sh
+          echo "SG_ID=$(terraform -chdir=terraform output -raw app_security_group_id)" >> "$GITHUB_ENV"
+          echo "DB_PUBLIC_IP=$(terraform -chdir=terraform output -raw db_public_ip)" >> "$GITHUB_ENV"
+          echo "STORE_URL=$(terraform -chdir=terraform output -raw store_url)" >> "$GITHUB_ENV"
+
+      - name: Liberar SSH temporário para este runner
+        run: bash scripts/ssh-access.sh open "$SG_ID"
+
+      - name: Montar variáveis do Ansible a partir dos parâmetros
+        env:
+          REGISTRY: ${{ inputs.docker_image || format('ghcr.io/{0}', github.repository_owner) }}
+          DOCKER_TAG: ${{ inputs.docker_tag }}
+          EXTRA_PACKAGES: ${{ inputs.extra_packages }}
+          UPDATE_OS: ${{ inputs.update_os }}
+          PULL_IMAGES: ${{ inputs.pull_images }}
+        run: |
+          jq -n \
+            --arg env "${{ inputs.environment }}" \
+            --arg registry "${REGISTRY,,}" \
+            --arg tag "$DOCKER_TAG" \
+            --arg pkgs "$EXTRA_PACKAGES" \
+            --argjson update_os "$UPDATE_OS" \
+            --argjson pull "$PULL_IMAGES" \
+            '{env_name: $env, docker_registry: $registry, docker_tag: $tag,
+              update_os: $update_os, pull_images: $pull,
+              extra_packages: ($pkgs | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)))}' \
+            > ansible/pipeline-vars.json
+          cat ansible/pipeline-vars.json
+
+      - name: ansible-playbook (SO, pacotes, Docker, MongoDB e aplicação)
+        working-directory: ansible
+        run: |
+          set -o pipefail
+          ansible-playbook playbook.yml -e @pipeline-vars.json --diff | tee ansible.log
+          {
+            echo "## Ansible - PLAY RECAP"
+            echo '```'
+            sed -n '/PLAY RECAP/,/^$/p' ansible.log | sed 's/\x1b\[[0-9;]*m//g'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verificação final (saúde + teste funcional)
+        working-directory: ansible
+        run: ansible-playbook ops-health.yml -e @pipeline-vars.json
+
+      - name: Evidência - MongoDB inacessível pela internet
+        run: |
+          if [ -n "$DB_PUBLIC_IP" ] && nc -z -w 5 "$DB_PUBLIC_IP" 27017; then
+            echo "::error::A porta 27017 respondeu pela internet!"; exit 1
+          fi
+          echo "OK: 27017 não responde pela internet (IP de saída do banco: ${DB_PUBLIC_IP:-nenhum})."
+          curl -fsS "$STORE_URL/api/info" && echo
+          echo "Loja disponível em $STORE_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fechar SSH temporário
+        if: always()
+        run: '[ -n "${SG_ID:-}" ] && bash scripts/ssh-access.sh close "$SG_ID" || true'
+
+  # ------------------------------------------------------------------ 3. Destroy
+  destroy:
+    name: "Destroy (${{ inputs.environment }})"
+    if: inputs.action == 'destroy'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      MONGO_ROOT_PASSWORD: ${{ secrets.MONGO_ROOT_PASSWORD }}
+      MONGO_APP_PASSWORD: ${{ secrets.MONGO_APP_PASSWORD }}
+    steps:
+      - name: Conferir confirmação
+        if: inputs.confirm_destroy != inputs.environment
+        run: |
+          echo "::error::Para destruir, preencha confirm_destroy com '${{ inputs.environment }}'."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - name: Preparar ferramentas
+        uses: ./.github/actions/setup
+        with:
+          environment: ${{ inputs.environment }}
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Verificar se o ambiente existe
+        id: exists
+        run: |
+          if terraform -chdir=terraform output -raw app_public_ip >/dev/null 2>&1; then
+            echo "up=true" >> "$GITHUB_OUTPUT"
+            bash scripts/gerar-inventario.sh
+            echo "SG_ID=$(terraform -chdir=terraform output -raw app_security_group_id)" >> "$GITHUB_ENV"
+          else
+            echo "up=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Backup final antes de destruir
+        if: steps.exists.outputs.up == 'true'
+        run: |
+          bash scripts/ssh-access.sh open "$SG_ID"
+          cd ansible
+          ansible-playbook ops-backup.yml -e env_name=${{ inputs.environment }}
+          FILE="$(cat ../backups/LAST_BACKUP)"
+          aws s3 cp "../backups/$FILE" "s3://$BACKUP_BUCKET/${{ inputs.environment }}/$FILE"
+          echo "Backup final: s3://$BACKUP_BUCKET/${{ inputs.environment }}/$FILE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fechar SSH temporário
+        if: always() && steps.exists.outputs.up == 'true'
+        run: bash scripts/ssh-access.sh close "$SG_ID" || true
+
+      - name: terraform destroy
+        working-directory: terraform
+        run: terraform destroy -no-color -auto-approve
+
+      - name: O que continua existindo (e gerando custo)
+        run: |
+          {
+            echo "## Ambiente ${{ inputs.environment }} removido"
+            echo "Removidos: VMs, volume EBS do MongoDB, Elastic IP, VPC, sub-redes e security groups."
+            echo
+            echo "Continuam existindo (centavos/mês):"
+            echo "- s3://$TF_STATE_BUCKET (Terraform state, versionado)"
+            echo "- s3://$BACKUP_BUCKET/${{ inputs.environment }}/ (backups, expiram em 14 dias)"
+            echo "- Imagens no GHCR (gratuitas para pacotes públicos)"
+          } >> "$GITHUB_STEP_SUMMARY"
