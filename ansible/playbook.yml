@@ -1,0 +1,40 @@
+# Configuração completa do ambiente KubeShop.
+# Ordem: banco primeiro (a API depende dele), depois a aplicação.
+# Idempotente: reexecutar com os mesmos parâmetros termina com changed=0.
+
+- name: Pré-checagens
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Conferir se as senhas do MongoDB vieram dos secrets
+      ansible.builtin.assert:
+        that:
+          - mongo_root_password | length >= 12
+          - mongo_app_password | length >= 12
+        fail_msg: "Defina os secrets MONGO_ROOT_PASSWORD e MONGO_APP_PASSWORD (mín. 12 caracteres) no ambiente do GitHub."
+        quiet: true
+      no_log: true
+      run_once: true
+      delegate_to: localhost
+
+    - name: Aguardar SSH (a VM pode ter sido reiniciada pelo Terraform)
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+- name: VM 2 - MongoDB
+  hosts: db
+  become: true
+  any_errors_fatal: true
+  roles:
+    - os_updates
+    - docker
+    - mongodb
+
+- name: VM 1 - Aplicação (Nginx + React e API)
+  hosts: app
+  become: true
+  any_errors_fatal: true
+  roles:
+    - os_updates
+    - docker
+    - containers

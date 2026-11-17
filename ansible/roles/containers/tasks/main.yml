@@ -1,0 +1,143 @@
+# Sobe a aplicação KubeShop na VM 1: API Node.js/Express e frontend React
+# servido pelo Nginx. O nginx.conf da imagem encaminha /api para o host "api",
+# por isso a API recebe o alias "api" na rede Docker.
+
+- name: Definir nomes das imagens (parâmetros docker_image / docker_tag)
+  ansible.builtin.set_fact:
+    api_image: "{{ docker_registry }}/kubeshop-api:{{ docker_tag }}"
+    frontend_image: "{{ docker_registry }}/kubeshop-frontend:{{ docker_tag }}"
+
+- name: Criar diretório de segredos da API
+  ansible.builtin.file:
+    path: "{{ kubeshop_base_dir }}/app/secrets"
+    state: directory
+    owner: "1000"   # usuário node da imagem
+    group: "1000"
+    mode: "0700"
+
+- name: Gravar a senha da aplicação no MongoDB (nunca exibida no log)
+  ansible.builtin.copy:
+    dest: "{{ kubeshop_base_dir }}/app/secrets/mongo_app_password"
+    content: "{{ mongo_app_password }}"
+    owner: "1000"
+    group: "1000"
+    mode: "0400"
+  no_log: true
+
+- name: Criar a rede Docker da aplicação
+  community.docker.docker_network:
+    name: kubeshop
+
+# force_source=true baixa a tag de novo; se o conteúdo mudou (ex.: latest),
+# o docker_container abaixo detecta o novo ID e recria o contêiner.
+- name: Obter imagens da aplicação ({{ docker_tag }})
+  community.docker.docker_image:
+    name: "{{ item }}"
+    source: pull
+    force_source: "{{ pull_images | bool }}"
+  loop:
+    - "{{ api_image }}"
+    - "{{ frontend_image }}"
+
+- name: Executar a API (conecta ao MongoDB pelo IP privado)
+  community.docker.docker_container:
+    name: kubeshop-api
+    image: "{{ api_image }}"
+    state: started
+    restart_policy: unless-stopped
+    network_mode: kubeshop
+    networks:
+      - name: kubeshop
+        aliases: [api]
+    env:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "3000"
+      APP_VERSION: "{{ docker_tag }}"
+      MONGO_HOST: "{{ db_private_ip }}"
+      MONGO_PORT: "27017"
+      MONGO_DATABASE: "{{ mongo_database }}"
+      MONGO_AUTH_SOURCE: "{{ mongo_database }}"
+      MONGO_USERNAME: "{{ mongo_app_user }}"
+      MONGO_PASSWORD_FILE: /run/secrets/mongo_app_password
+    volumes:
+      - "{{ kubeshop_base_dir }}/app/secrets:/run/secrets:ro"
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    cap_drop: [ALL]
+    security_opts: ["no-new-privileges:true"]
+    init: true
+    stop_timeout: 20
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health/ready',{signal:AbortSignal.timeout(2500)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 4s
+      retries: 3
+      start_period: 30s
+    log_driver: json-file
+    log_options:
+      max-size: "10m"
+      max-file: "3"
+
+- name: Executar o frontend Nginx + React (porta 80 pública -> 8080 no contêiner)
+  community.docker.docker_container:
+    name: kubeshop-frontend
+    image: "{{ frontend_image }}"
+    state: started
+    restart_policy: unless-stopped
+    network_mode: kubeshop
+    networks:
+      - name: kubeshop
+        aliases: [frontend]
+    published_ports:
+      - "80:8080"
+    read_only: true
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    cap_drop: [ALL]
+    security_opts: ["no-new-privileges:true"]
+    init: true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    log_driver: json-file
+    log_options:
+      max-size: "10m"
+      max-file: "3"
+
+# ---------------------------------------------------------------- verificações
+- name: Aguardar contêineres saudáveis
+  community.docker.docker_container_info:
+    name: "{{ item }}"
+  register: app_info
+  until: app_info.container.State.Health.Status | default('') == 'healthy'
+  retries: 30
+  delay: 5
+  changed_when: false
+  loop: [kubeshop-api, kubeshop-frontend]
+
+- name: Verificar a loja e a API pelo Nginx (inclui conexão da API com o banco)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1{{ item }}"
+    status_code: 200
+  register: http_check
+  until: http_check.status == 200
+  retries: 10
+  delay: 3
+  loop: [/healthz, /api/health/ready, /api/products]
+
+- name: Ler a versão publicada
+  ansible.builtin.uri:
+    url: http://127.0.0.1/api/info
+    return_content: true
+  register: app_version
+
+- name: Resultado
+  ansible.builtin.debug:
+    msg: "KubeShop no ar: versão {{ app_version.json.version }} | imagens {{ api_image }} e {{ frontend_image }}"
