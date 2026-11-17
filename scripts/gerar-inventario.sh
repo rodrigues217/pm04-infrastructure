@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 # Gera o inventário do Ansible a partir dos outputs do Terraform.
-# É assim que os dois passos da pipeline se integram: o Terraform cria as VMs
-# e informa os IPs; o Ansible recebe esses IPs sem nenhuma edição manual.
 # Uso: scripts/gerar-inventario.sh [arquivo-de-saida]
 set -euo pipefail
 
@@ -37,7 +35,7 @@ all:
           ansible_host: ${DB_IP}
           db_public_ip: "${DB_PUBLIC_IP}"
           mongo_volume_id: ${VOLUME_ID}
-          # Sem SSH pela internet: o acesso ao banco passa pela VM da aplicação (bastion).
+          # SSH no banco só via VM da aplicação
           ansible_ssh_common_args: "-o ProxyCommand='ssh -i ${KEY} ${SSH_OPTS} -W %h:%p -q ubuntu@${APP_IP}'"
 EOF
 

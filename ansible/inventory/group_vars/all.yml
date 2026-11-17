@@ -1,6 +1,5 @@
-# Valores padrão. A pipeline sobrescreve com -e @pipeline-vars.json
-# (parâmetros do workflow_dispatch). Senhas vêm de variáveis de ambiente
-# alimentadas pelos GitHub Secrets e nunca são gravadas no repositório.
+# Valores padrão. A pipeline sobrescreve com -e @pipeline-vars.json.
+# As senhas vêm das variáveis de ambiente preenchidas pelos GitHub Secrets.
 
 env_name: dev
 
@@ -23,8 +22,8 @@ extra_packages: []
 
 # ---- Imagens da aplicação (parâmetros docker_image / docker_tag)
 docker_registry: ghcr.io/SEU-USUARIO   # sobrescrito pela pipeline
-docker_tag: "1.0.0"
-pull_images: false                     # true = força baixar a tag de novo (tags mutáveis, ex.: latest)
+docker_tag: ""                         # vazio = manter a tag em execução
+pull_images: false                     # true = baixar a tag de novo (tags mutáveis)
 
 # ---- MongoDB
 mongo_image: mongo

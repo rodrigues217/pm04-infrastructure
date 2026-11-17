@@ -1,6 +1,5 @@
 # ---------------------------------------------------------------- volume EBS
-# Em instâncias Nitro (t3) o disco aparece como NVMe; o caminho by-id contém o ID
-# do volume, então não dependemos de /dev/nvme1n1 vs /dev/xvdf.
+# Em instâncias Nitro o disco é NVMe; o caminho by-id usa o ID do volume.
 - name: Definir o caminho do disco de dados
   ansible.builtin.set_fact:
     mongo_device: "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_{{ mongo_volume_id | replace('-', '') }}"
@@ -41,7 +40,7 @@
     group: "999"
     mode: "0700"
 
-- name: Gravar senhas do MongoDB (arquivos 0400, nunca exibidos no log)
+- name: Gravar senhas do MongoDB
   ansible.builtin.copy:
     dest: "{{ kubeshop_base_dir }}/mongo/secrets/{{ item.file }}"
     content: "{{ item.value }}"
@@ -87,9 +86,7 @@
       - "{{ kubeshop_base_dir }}/mongo/secrets:/run/secrets:ro"
       - "{{ kubeshop_base_dir }}/mongo/init.js:/docker-entrypoint-initdb.d/10-app-user.js:ro"
       - "{{ kubeshop_base_dir }}/mongo/healthcheck.js:/opt/healthcheck.js:ro"
-    # Somente no IP privado: nem a VM expõe 27017 em interface pública,
-    # e o security group só aceita conexões vindas da VM da aplicação.
-    published_ports:
+    published_ports: # somente no IP privado
       - "{{ db_private_ip }}:27017:27017"
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--file", "/opt/healthcheck.js"]

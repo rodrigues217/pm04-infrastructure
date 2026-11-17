@@ -3,7 +3,7 @@
   changed_when: false
   failed_when: false
 
-# Swap: margem de memória para VMs de 1 GiB (t3.micro, Free Tier).
+# Swap: margem de memória para VMs de 1 GiB.
 - name: Criar arquivo de swap (somente se ainda não existir)
   ansible.builtin.command: fallocate -l {{ swap_size_mb }}M /swapfile
   args:

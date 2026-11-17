@@ -1,6 +1,6 @@
 name: Validar código de infraestrutura
 
-# Roda a cada push/PR: não acessa a AWS, só verifica formatação e sintaxe.
+# Sem acesso à AWS: formatação e sintaxe.
 on:
   push:
     branches: [main]

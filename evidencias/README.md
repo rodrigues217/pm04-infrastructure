@@ -1,6 +1,6 @@
 # Evidências
 
-Prints e logs das execuções da pipeline, nomeados conforme
-[docs/roteiro-apresentacao.md](../docs/roteiro-apresentacao.md) (01-plan.png … 16-destroy.png).
+Prints das execuções, numerados conforme o
+[relatório de validação](../docs/relatorio-validacao.md) (`01-imagens.png` a `22-destroy.png`).
 
-Antes de salvar, confira que nenhum print mostra secrets, chaves ou senhas.
+Nenhum print pode mostrar valores de secrets, chaves ou senhas.

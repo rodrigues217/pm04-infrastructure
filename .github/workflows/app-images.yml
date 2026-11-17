@@ -1,10 +1,7 @@
 name: App KubeShop - publicar imagens
 
-# Ponto de integração com o CI/CD da aplicação (escopo, seção 7).
-# A Zibiska Korp já possui CI/CD; aqui ele é representado por este workflow,
-# que constrói as imagens a partir do repositório da aplicação e as publica no
-# GitHub Container Registry com uma tag explícita. O deploy de infraestrutura
-# só consome a tag escolhida (parâmetro docker_tag).
+# Substitui o CI/CD da aplicação nos testes (o repositório fornecido não tem
+# workflows). Contrato de imagens: docs/integracao-cicd.md
 on:
   workflow_dispatch:
     inputs:

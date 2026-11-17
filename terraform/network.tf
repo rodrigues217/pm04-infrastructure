@@ -3,8 +3,7 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
-  # Nomes de recursos que forçam recriação usam só o ambiente (estáveis);
-  # instance_name aparece apenas em tags, para poder mudar sem recriar nada.
+  # instance_name fica só nas tags; nomes que forçam recriação usam o ambiente.
   prefix = "kubeshop-${var.environment}"
   az     = data.aws_availability_zones.available.names[0]
 }
@@ -23,7 +22,6 @@ resource "aws_internet_gateway" "main" {
   tags   = { Name = "${local.prefix}-igw" }
 }
 
-# Sub-rede pública: só a VM da aplicação recebe tráfego da internet.
 resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = cidrsubnet(var.vpc_cidr, 8, 1)
@@ -33,7 +31,6 @@ resource "aws_subnet" "public" {
   tags = { Name = "${local.prefix}-public", Tier = "app" }
 }
 
-# Sub-rede de dados: VM exclusiva do MongoDB.
 resource "aws_subnet" "data" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = cidrsubnet(var.vpc_cidr, 8, 2)
@@ -60,7 +57,6 @@ resource "aws_route_table_association" "public" {
 }
 
 # ---------------------------------------------------------------- saída do banco
-# Opcional: NAT Gateway para deixar o banco 100% sem IP público.
 resource "aws_eip" "nat" {
   count  = var.enable_nat_gateway ? 1 : 0
   domain = "vpc"
@@ -94,8 +90,8 @@ resource "aws_route_table_association" "data" {
 }
 
 # ---------------------------------------------------------------- security groups
-# As regras são recursos separados (e não blocos inline) para que a regra SSH
-# temporária criada pela pipeline não seja apagada pelo Terraform no meio da execução.
+# Regras como recursos separados: o Terraform não remove a regra SSH
+# temporária que a pipeline cria.
 
 resource "aws_security_group" "app" {
   name        = "${local.prefix}-app"

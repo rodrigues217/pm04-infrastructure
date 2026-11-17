@@ -32,7 +32,7 @@ variable "app_instance_type" {
 }
 
 variable "db_instance_type" {
-  description = "Tipo da VM exclusiva do MongoDB. t3.micro cabe no Free Tier (o Ansible cria swap de 1 GB)."
+  description = "Tipo da VM exclusiva do MongoDB."
   type        = string
   default     = "t3.micro"
 }
@@ -56,7 +56,7 @@ variable "db_volume_size" {
 }
 
 variable "admin_cidrs" {
-  description = "Faixas fixas com acesso SSH à VM da aplicação (ex.: IP do administrador). A pipeline abre e fecha uma regra temporária só para o IP do runner."
+  description = "Faixas com acesso SSH fixo à VM da aplicação (ex.: [\"200.1.2.3/32\"])."
   type        = list(string)
   default     = []
 }
@@ -67,7 +67,7 @@ variable "ssh_public_key" {
 }
 
 variable "enable_nat_gateway" {
-  description = "true = VM do banco sem IP público, saindo pela NAT Gateway (+~US$ 33/mês). false = VM do banco com IP público só para saída, sem nenhuma porta liberada para a internet."
+  description = "true = VM do banco sem IP público, com saída pela NAT Gateway. false = IP público só para saída, sem portas de entrada."
   type        = bool
   default     = false
 }

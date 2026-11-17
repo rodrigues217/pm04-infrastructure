@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Garante (de forma idempotente) os dois buckets que vivem FORA do ciclo de vida
-# dos ambientes, para não serem apagados por um terraform destroy:
-#   - kubeshop-tfstate-<conta>-<região>  -> Terraform state (versionado)
-#   - kubeshop-backups-<conta>-<região>  -> backups do MongoDB (retenção de 14 dias)
-# Exporta TF_STATE_BUCKET e BACKUP_BUCKET para os próximos passos da pipeline.
+# Cria, se ainda não existirem, os buckets que ficam fora do Terraform
+# (um destroy não pode apagá-los):
+#   kubeshop-tfstate-<conta>-<região>  state do Terraform
+#   kubeshop-backups-<conta>-<região>  backups do MongoDB (14 dias)
+# Exporta TF_STATE_BUCKET e BACKUP_BUCKET para os passos seguintes.
 set -euo pipefail
 
 REGION="${AWS_REGION:?defina AWS_REGION}"
@@ -37,7 +37,7 @@ ensure_bucket() {
 ensure_bucket "$STATE_BUCKET"
 ensure_bucket "$BACKUP_BUCKET"
 
-# Retenção dos backups: 14 dias para a versão atual, 7 dias para versões antigas.
+# 14 dias para a versão atual, 7 para versões antigas.
 aws s3api put-bucket-lifecycle-configuration --bucket "$BACKUP_BUCKET" --lifecycle-configuration '{
   "Rules": [{
     "ID": "retencao-backups",

@@ -1,6 +1,5 @@
 terraform {
-  # 1.10+ é necessário para o lock nativo do backend S3 (use_lockfile).
-  required_version = ">= 1.10.0"
+  required_version = ">= 1.10.0" # use_lockfile
 
   required_providers {
     aws = {
@@ -13,8 +12,6 @@ terraform {
 provider "aws" {
   region = var.aws_region
 
-  # Tags aplicadas a todos os recursos: facilitam o rateio de custos
-  # e a identificação do que pertence a cada ambiente.
   default_tags {
     tags = {
       Project     = "kubeshop"

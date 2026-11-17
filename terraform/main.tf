@@ -26,10 +26,8 @@ resource "aws_instance" "app" {
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.app.id]
   key_name               = aws_key_pair.deploy.key_name
-  # Sem associate_public_ip_address: o IP público é o Elastic IP abaixo, e a
-  # sub-rede já não atribui IP automático. Declarar "false" aqui faria o Terraform
-  # recriar a VM a cada plano, porque a AWS passa a reportar "true" depois que o
-  # Elastic IP é associado.
+  # associate_public_ip_address omitido de propósito: com o Elastic IP a AWS
+  # reporta "true", e declarar "false" recriaria a VM a cada plano.
 
   metadata_options {
     http_tokens = "required" # IMDSv2
@@ -47,13 +45,11 @@ resource "aws_instance" "app" {
   }
 
   lifecycle {
-    # Uma AMI nova publicada pela Canonical não deve recriar a VM:
-    # as atualizações do SO são feitas pelo Ansible (update_os).
-    ignore_changes = [ami]
+    ignore_changes = [ami] # SO atualizado pelo Ansible (update_os)
   }
 }
 
-# IP fixo da loja: não muda quando a VM é parada/reiniciada (ex.: troca de instance_type).
+# Endereço fixo da loja, mantido em stop/start da VM.
 resource "aws_eip" "app" {
   domain   = "vpc"
   instance = aws_instance.app.id
@@ -70,8 +66,7 @@ resource "aws_instance" "db" {
   vpc_security_group_ids = [aws_security_group.db.id]
   key_name               = aws_key_pair.deploy.key_name
 
-  # Sem NAT Gateway o banco precisa de IP público apenas para SAÍDA
-  # (apt e Docker Hub). O security group não libera nenhuma porta para a internet.
+  # Sem NAT Gateway, IP público só para saída (apt, Docker Hub).
   associate_public_ip_address = !var.enable_nat_gateway
 
   metadata_options {
@@ -94,8 +89,7 @@ resource "aws_instance" "db" {
   }
 }
 
-# Dados do MongoDB em volume separado do disco do sistema:
-# sobrevivem a troca de tipo da VM, reinícios e até à recriação da VM.
+# Dados do MongoDB fora do disco do sistema.
 resource "aws_ebs_volume" "mongo" {
   availability_zone = local.az
   size              = var.db_volume_size

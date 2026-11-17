@@ -12,7 +12,7 @@ inputs:
   aws-secret-access-key:
     required: true
   aws-session-token:
-    description: "Necessário só para credenciais temporárias (ex.: AWS Academy Learner Lab)."
+    description: "Somente para credenciais temporárias (STS)."
     required: false
     default: ""
   ssh-private-key:
@@ -40,7 +40,6 @@ runs:
         install -m 700 -d ~/.ssh
         printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/kubeshop
         chmod 600 ~/.ssh/kubeshop
-        # A chave pública é derivada da privada: só um secret para manter.
         echo "TF_VAR_ssh_public_key=$(ssh-keygen -y -f ~/.ssh/kubeshop)" >> "$GITHUB_ENV"
         echo "SSH_KEY_FILE=$HOME/.ssh/kubeshop" >> "$GITHUB_ENV"
 

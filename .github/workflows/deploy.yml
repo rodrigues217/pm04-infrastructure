@@ -1,6 +1,5 @@
 name: Infra KubeShop - deploy (Terraform + Ansible)
 
-# Execução manual com parâmetros (PM-04, seção 4).
 on:
   workflow_dispatch:
     inputs:
@@ -19,20 +18,19 @@ on:
         type: string
         default: vm-pm04
       instance_type:
-        description: Tipo da VM da aplicação
+        description: "Tipo da VM da aplicação (ambiente = variável APP_INSTANCE_TYPE ou t3.micro)"
         type: choice
-        options: [t3.micro, t3.small, t3.medium]
-        default: t3.micro
-      # (O tipo da VM do banco fica na variável de repositório DB_INSTANCE_TYPE,
-      #  para manter o formulário com no máximo 10 parâmetros.)
+        options: [ambiente, t3.micro, t3.small, t3.medium]
+        default: ambiente
+      # Tipo da VM do banco: variável DB_INSTANCE_TYPE.
       docker_image:
         description: "Registro/namespace das imagens (vazio = ghcr.io/<dono do repositório>)"
         type: string
         default: ""
       docker_tag:
-        description: Tag das imagens kubeshop-api e kubeshop-frontend (ex. 1.0.0)
+        description: "Tag das imagens (ex. 1.0.1). Vazio = manter a versão em execução"
         type: string
-        default: "1.0.0"
+        default: ""
       pull_images:
         description: Forçar download da tag (necessário para tags mutáveis como latest)
         type: boolean
@@ -65,7 +63,7 @@ env:
   TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
   TF_VAR_environment: ${{ inputs.environment }}
   TF_VAR_instance_name: ${{ inputs.instance_name }}
-  TF_VAR_app_instance_type: ${{ inputs.instance_type }}
+  TF_VAR_app_instance_type: ${{ inputs.instance_type != 'ambiente' && inputs.instance_type || vars.APP_INSTANCE_TYPE || 't3.micro' }}
   TF_VAR_db_instance_type: ${{ vars.DB_INSTANCE_TYPE || 't3.micro' }}
   TF_VAR_admin_cidrs: ${{ vars.ADMIN_CIDRS || '[]' }}
   TF_VAR_enable_nat_gateway: ${{ vars.ENABLE_NAT_GATEWAY || 'false' }}

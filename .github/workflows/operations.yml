@@ -6,7 +6,7 @@ on:
       operation:
         description: Rotina a executar
         type: choice
-        options: [health, logs, restart, backup, restore-test, restore-production]
+        options: [health, logs, inventory, restart, backup, restore-test, restore-production]
         default: health
       environment:
         description: Ambiente
@@ -27,8 +27,7 @@ on:
         type: string
         default: ""
   schedule:
-    # Backup automático diário às 06:00 UTC (03:00 em Brasília).
-    - cron: "0 6 * * *"
+    - cron: "0 6 * * *" # backup diário, 03:00 em Brasília
 
 permissions:
   contents: read
@@ -82,8 +81,34 @@ jobs:
           fi
           echo "up=true" >> "$GITHUB_OUTPUT"
           bash scripts/gerar-inventario.sh
-          echo "SG_ID=$(terraform -chdir=terraform output -raw app_security_group_id)" >> "$GITHUB_ENV"
-          bash scripts/ssh-access.sh open "$(terraform -chdir=terraform output -raw app_security_group_id)"
+          if [ "$OPERATION" != "inventory" ]; then
+            SG_ID="$(terraform -chdir=terraform output -raw app_security_group_id)"
+            echo "SG_ID=$SG_ID" >> "$GITHUB_ENV"
+            bash scripts/ssh-access.sh open "$SG_ID"
+          fi
+
+      - name: Inventário dos recursos
+        if: steps.env.outputs.up == 'true' && env.OPERATION == 'inventory'
+        run: |
+          {
+            echo "## Inventário - $TARGET_ENV"
+            echo '```'
+            terraform -chdir=terraform output -no-color
+            echo
+            terraform -chdir=terraform state list
+            echo '```'
+            echo '```'
+            aws ec2 describe-instances \
+              --filters "Name=tag:Project,Values=kubeshop" "Name=tag:Environment,Values=$TARGET_ENV" \
+                        "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+              --query 'Reservations[].Instances[].[Tags[?Key==`Name`]|[0].Value, Tags[?Key==`Role`]|[0].Value, InstanceType, PrivateIpAddress, PublicIpAddress, State.Name]' \
+              --output table
+            aws ec2 describe-volumes \
+              --filters "Name=tag:Project,Values=kubeshop" "Name=tag:Environment,Values=$TARGET_ENV" \
+              --query 'Volumes[].[Tags[?Key==`Name`]|[0].Value, VolumeId, Size, VolumeType, State]' \
+              --output table
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Saúde
         if: steps.env.outputs.up == 'true' && env.OPERATION == 'health'
@@ -100,7 +125,7 @@ jobs:
         working-directory: ansible
         run: ansible-playbook ops-restart.yml -e env_name=$TARGET_ENV -e restart_target=${{ inputs.restart_target }}
 
-      # Backup também roda antes de uma restauração em produção (ponto de retorno).
+      # Também roda antes de restore-production, como ponto de retorno.
       - name: Backup para o S3
         if: steps.env.outputs.up == 'true' && (env.OPERATION == 'backup' || env.OPERATION == 'restore-production')
         run: |
@@ -120,7 +145,7 @@ jobs:
           if [ -z "$FILE" ]; then
             LIST=$(aws s3 ls "s3://$BACKUP_BUCKET/$TARGET_ENV/" | awk '{print $4}' | sort)
             if [ "$OPERATION" = "restore-production" ]; then
-              # Mais recente ANTERIOR ao backup de segurança que acabou de ser feito.
+              # o mais recente antes do backup de segurança feito agora
               FILE=$(echo "$LIST" | grep -v "$(cat backups/LAST_BACKUP)" | tail -1)
             else
               FILE=$(echo "$LIST" | tail -1)

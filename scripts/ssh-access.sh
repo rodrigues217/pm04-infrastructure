@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Abre/fecha SSH (porta 22) na VM da aplicação SOMENTE para o IP público do runner.
-# A regra existe apenas durante a execução da pipeline (fechada em "if: always()").
+# Abre/fecha a porta 22 da VM da aplicação para o IP público de quem executa.
 # Uso: scripts/ssh-access.sh open|close <security-group-id>
 set -euo pipefail
 

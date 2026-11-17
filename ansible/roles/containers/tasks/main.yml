@@ -1,11 +1,29 @@
-# Sobe a aplicação KubeShop na VM 1: API Node.js/Express e frontend React
-# servido pelo Nginx. O nginx.conf da imagem encaminha /api para o host "api",
-# por isso a API recebe o alias "api" na rede Docker.
+# API e frontend na VM 1. O nginx.conf da imagem encaminha /api para o host
+# "api", por isso o alias na rede Docker.
 
-- name: Definir nomes das imagens (parâmetros docker_image / docker_tag)
+# docker_tag vazio: mantém a tag que já está rodando (evita que um deploy de
+# infraestrutura volte a aplicação para uma versão antiga).
+- name: Ler a tag em execução
+  community.docker.docker_container_info:
+    name: kubeshop-api
+  register: running_api
+  when: docker_tag | default('') | length == 0
+
+- name: Exigir docker_tag no primeiro deploy
+  ansible.builtin.assert:
+    that: running_api.exists
+    fail_msg: "A aplicação ainda não está instalada neste ambiente. Informe docker_tag (ex.: 1.0.0)."
+    quiet: true
+  when: docker_tag | default('') | length == 0
+
+- name: Definir as imagens
   ansible.builtin.set_fact:
-    api_image: "{{ docker_registry }}/kubeshop-api:{{ docker_tag }}"
-    frontend_image: "{{ docker_registry }}/kubeshop-frontend:{{ docker_tag }}"
+    app_tag: "{{ docker_tag if (docker_tag | default('') | length > 0) else (running_api.container.Config.Image.split(':') | last) }}"
+
+- name: Montar os nomes das imagens
+  ansible.builtin.set_fact:
+    api_image: "{{ docker_registry }}/kubeshop-api:{{ app_tag }}"
+    frontend_image: "{{ docker_registry }}/kubeshop-frontend:{{ app_tag }}"
 
 - name: Criar diretório de segredos da API
   ansible.builtin.file:
@@ -15,7 +33,7 @@
     group: "1000"
     mode: "0700"
 
-- name: Gravar a senha da aplicação no MongoDB (nunca exibida no log)
+- name: Gravar a senha do MongoDB usada pela API
   ansible.builtin.copy:
     dest: "{{ kubeshop_base_dir }}/app/secrets/mongo_app_password"
     content: "{{ mongo_app_password }}"
@@ -28,9 +46,8 @@
   community.docker.docker_network:
     name: kubeshop
 
-# force_source=true baixa a tag de novo; se o conteúdo mudou (ex.: latest),
-# o docker_container abaixo detecta o novo ID e recria o contêiner.
-- name: Obter imagens da aplicação ({{ docker_tag }})
+# force_source baixa a tag de novo; se a imagem mudou, o contêiner é recriado.
+- name: Obter imagens da aplicação ({{ app_tag }})
   community.docker.docker_image:
     name: "{{ item }}"
     source: pull
@@ -53,7 +70,7 @@
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: "3000"
-      APP_VERSION: "{{ docker_tag }}"
+      APP_VERSION: "{{ app_tag }}"
       MONGO_HOST: "{{ db_private_ip }}"
       MONGO_PORT: "27017"
       MONGO_DATABASE: "{{ mongo_database }}"
@@ -122,7 +139,7 @@
   changed_when: false
   loop: [kubeshop-api, kubeshop-frontend]
 
-- name: Verificar a loja e a API pelo Nginx (inclui conexão da API com o banco)
+- name: Verificar a loja e a API pelo Nginx
   ansible.builtin.uri:
     url: "http://127.0.0.1{{ item }}"
     status_code: 200
@@ -140,4 +157,4 @@
 
 - name: Resultado
   ansible.builtin.debug:
-    msg: "KubeShop no ar: versão {{ app_version.json.version }} | imagens {{ api_image }} e {{ frontend_image }}"
+    msg: "Versão {{ app_version.json.version }} | {{ api_image }} | {{ frontend_image }}"
