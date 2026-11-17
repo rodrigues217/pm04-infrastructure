@@ -1,0 +1,150 @@
+name: Infra KubeShop - operação (saúde, logs, reinício, backup, restauração)
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Rotina a executar
+        type: choice
+        options: [health, logs, restart, backup, restore-test, restore-production]
+        default: health
+      environment:
+        description: Ambiente
+        type: choice
+        options: [dev, homolog, prod]
+        default: dev
+      restart_target:
+        description: "restart: o que reiniciar"
+        type: choice
+        options: [all, app, db]
+        default: all
+      backup_file:
+        description: "restore-*: nome do arquivo no S3 (vazio = o mais recente)"
+        type: string
+        default: ""
+      confirm:
+        description: "restore-production: digite RESTAURAR <ambiente> (ex.: RESTAURAR dev)"
+        type: string
+        default: ""
+  schedule:
+    # Backup automático diário às 06:00 UTC (03:00 em Brasília).
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  OPERATION: ${{ inputs.operation || 'backup' }}
+  TARGET_ENV: ${{ inputs.environment || vars.SCHEDULED_BACKUP_ENV || 'dev' }}
+  TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+  TF_VAR_environment: ${{ inputs.environment || vars.SCHEDULED_BACKUP_ENV || 'dev' }}
+  ANSIBLE_FORCE_COLOR: "true"
+
+concurrency:
+  group: kubeshop-${{ inputs.environment || vars.SCHEDULED_BACKUP_ENV || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  operate:
+    name: "${{ inputs.operation || 'backup agendado' }} (${{ inputs.environment || vars.SCHEDULED_BACKUP_ENV || 'dev' }})"
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || vars.SCHEDULED_BACKUP_ENV || 'dev' }}
+    env:
+      MONGO_ROOT_PASSWORD: ${{ secrets.MONGO_ROOT_PASSWORD }}
+      MONGO_APP_PASSWORD: ${{ secrets.MONGO_APP_PASSWORD }}
+    steps:
+      - name: Conferir confirmação da restauração em produção
+        if: env.OPERATION == 'restore-production' && inputs.confirm != format('RESTAURAR {0}', inputs.environment)
+        run: |
+          echo "::error::Para restaurar sobre o banco principal digite exatamente: RESTAURAR ${{ inputs.environment }}"
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - name: Preparar ferramentas
+        uses: ./.github/actions/setup
+        with:
+          environment: ${{ env.TARGET_ENV }}
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Localizar o ambiente (outputs do Terraform)
+        id: env
+        run: |
+          if ! terraform -chdir=terraform output -raw app_public_ip >/dev/null 2>&1; then
+            echo "Ambiente $TARGET_ENV não existe; nada a fazer."
+            echo "up=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "up=true" >> "$GITHUB_OUTPUT"
+          bash scripts/gerar-inventario.sh
+          echo "SG_ID=$(terraform -chdir=terraform output -raw app_security_group_id)" >> "$GITHUB_ENV"
+          bash scripts/ssh-access.sh open "$(terraform -chdir=terraform output -raw app_security_group_id)"
+
+      - name: Saúde
+        if: steps.env.outputs.up == 'true' && env.OPERATION == 'health'
+        working-directory: ansible
+        run: ansible-playbook ops-health.yml -e env_name=$TARGET_ENV
+
+      - name: Logs e diagnóstico
+        if: steps.env.outputs.up == 'true' && env.OPERATION == 'logs'
+        working-directory: ansible
+        run: ansible-playbook ops-logs.yml -e env_name=$TARGET_ENV
+
+      - name: Reinício controlado
+        if: steps.env.outputs.up == 'true' && env.OPERATION == 'restart'
+        working-directory: ansible
+        run: ansible-playbook ops-restart.yml -e env_name=$TARGET_ENV -e restart_target=${{ inputs.restart_target }}
+
+      # Backup também roda antes de uma restauração em produção (ponto de retorno).
+      - name: Backup para o S3
+        if: steps.env.outputs.up == 'true' && (env.OPERATION == 'backup' || env.OPERATION == 'restore-production')
+        run: |
+          cd ansible
+          ansible-playbook ops-backup.yml -e env_name=$TARGET_ENV
+          FILE="$(cat ../backups/LAST_BACKUP)"
+          aws s3 cp "../backups/$FILE" "s3://$BACKUP_BUCKET/$TARGET_ENV/$FILE"
+          SIZE=$(du -h "../backups/$FILE" | cut -f1)
+          echo "Backup enviado: s3://$BACKUP_BUCKET/$TARGET_ENV/$FILE ($SIZE)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Baixar backup do S3
+        if: steps.env.outputs.up == 'true' && startsWith(env.OPERATION, 'restore-')
+        env:
+          REQUESTED: ${{ inputs.backup_file }}
+        run: |
+          FILE="$REQUESTED"
+          if [ -z "$FILE" ]; then
+            LIST=$(aws s3 ls "s3://$BACKUP_BUCKET/$TARGET_ENV/" | awk '{print $4}' | sort)
+            if [ "$OPERATION" = "restore-production" ]; then
+              # Mais recente ANTERIOR ao backup de segurança que acabou de ser feito.
+              FILE=$(echo "$LIST" | grep -v "$(cat backups/LAST_BACKUP)" | tail -1)
+            else
+              FILE=$(echo "$LIST" | tail -1)
+            fi
+          fi
+          [ -n "$FILE" ] || { echo "::error::Nenhum backup encontrado em s3://$BACKUP_BUCKET/$TARGET_ENV/"; exit 1; }
+          mkdir -p restore
+          aws s3 cp "s3://$BACKUP_BUCKET/$TARGET_ENV/$FILE" "restore/$FILE"
+          echo "RESTORE_FILE=$PWD/restore/$FILE" >> "$GITHUB_ENV"
+          echo "Backup selecionado: $FILE" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Restauração
+        if: steps.env.outputs.up == 'true' && startsWith(env.OPERATION, 'restore-')
+        working-directory: ansible
+        run: |
+          MODE=test
+          [ "$OPERATION" = "restore-production" ] && MODE=production
+          ansible-playbook ops-restore.yml -e env_name=$TARGET_ENV \
+            -e restore_mode=$MODE -e restore_archive="$RESTORE_FILE"
+          if [ "$MODE" = "production" ]; then
+            ansible-playbook ops-restart.yml -e restart_target=app
+            ansible-playbook ops-health.yml -e env_name=$TARGET_ENV
+          fi
+
+      - name: Fechar SSH temporário
+        if: always()
+        run: '[ -n "${SG_ID:-}" ] && bash scripts/ssh-access.sh close "$SG_ID" || true'
