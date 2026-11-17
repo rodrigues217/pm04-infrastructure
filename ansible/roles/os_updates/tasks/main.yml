@@ -1,0 +1,75 @@
+- name: Aguardar o cloud-init terminar (primeiro boot)
+  ansible.builtin.command: cloud-init status --wait
+  changed_when: false
+  failed_when: false
+
+# Swap: margem de memória para VMs de 1 GiB (t3.micro, Free Tier).
+- name: Criar arquivo de swap (somente se ainda não existir)
+  ansible.builtin.command: fallocate -l {{ swap_size_mb }}M /swapfile
+  args:
+    creates: /swapfile
+  register: swapfile
+  when: swap_size_mb | int > 0
+
+- name: Proteger e formatar o swap
+  ansible.builtin.shell: chmod 600 /swapfile && mkswap /swapfile
+  when: swapfile is changed
+
+- name: Registrar swap no fstab
+  ansible.posix.mount:
+    path: none
+    src: /swapfile
+    fstype: swap
+    opts: sw
+    state: present
+  when: swap_size_mb | int > 0
+
+- name: Ativar swap
+  ansible.builtin.command: swapon /swapfile
+  when: swapfile is changed
+
+- name: Atualizar o cache do apt (no máximo 1x por hora)
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+    lock_timeout: 600
+  changed_when: false # atualizar o índice não altera o sistema (mantém o recap em changed=0)
+
+- name: Instalar pacotes base e extras (parâmetro extra_packages)
+  ansible.builtin.apt:
+    name: "{{ base_packages + (extra_packages | default([])) }}"
+    state: present
+    lock_timeout: 600
+
+- name: Verificar atualizações pendentes do SO
+  ansible.builtin.shell: set -o pipefail && apt list --upgradable 2>/dev/null | tail -n +2
+  args:
+    executable: /bin/bash
+  register: upgradable
+  changed_when: false
+
+- name: Relatório de atualizações pendentes
+  ansible.builtin.debug:
+    msg: >-
+      {{ upgradable.stdout_lines | length }} pacote(s) com atualização disponível.
+      update_os={{ update_os | bool }}: {{ 'serão aplicadas agora' if (update_os | bool) else 'nada será alterado' }}.
+
+- name: Aplicar atualizações do SO (somente com update_os=true)
+  ansible.builtin.apt:
+    upgrade: safe
+    autoremove: true
+    lock_timeout: 600
+  when: update_os | bool
+
+- name: Verificar se o SO pede reinício
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: reboot_flag
+
+- name: Reiniciar a VM (somente com update_os=true e se o SO exigir)
+  ansible.builtin.reboot:
+    reboot_timeout: 600
+    msg: "Reinício solicitado pela pipeline após atualização do SO"
+  when:
+    - update_os | bool
+    - reboot_flag.stat.exists
