@@ -1,0 +1,20 @@
+# Exemplo. O inventário real (hosts.yml) é gerado pela pipeline a partir
+# dos outputs do Terraform: scripts/gerar-inventario.sh
+all:
+  vars:
+    ansible_user: ubuntu
+    ansible_ssh_private_key_file: ~/.ssh/kubeshop
+    app_public_ip: 203.0.113.10
+    db_private_ip: 10.40.2.25
+  children:
+    app:
+      hosts:
+        app-vm:
+          ansible_host: 203.0.113.10
+    db:
+      hosts:
+        db-vm:
+          ansible_host: 10.40.2.25
+          # O banco não tem SSH pela internet: o acesso passa pela VM da aplicação.
+          ansible_ssh_common_args: "-o ProxyCommand='ssh -i ~/.ssh/kubeshop -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p -q ubuntu@203.0.113.10'"
+          mongo_volume_id: vol-0123456789abcdef0

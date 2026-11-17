@@ -1,0 +1,41 @@
+# Valores padrão. A pipeline sobrescreve com -e @pipeline-vars.json
+# (parâmetros do workflow_dispatch). Senhas vêm de variáveis de ambiente
+# alimentadas pelos GitHub Secrets e nunca são gravadas no repositório.
+
+env_name: dev
+
+# ---- Sistema operacional
+update_os: false
+swap_size_mb: 1024   # 0 desativa
+
+base_packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - jq
+  - htop
+  - net-tools
+  - dnsutils
+  - iputils-ping
+  - unzip
+  - python3-requests   # usado pelos módulos community.docker
+extra_packages: []
+
+# ---- Imagens da aplicação (parâmetros docker_image / docker_tag)
+docker_registry: ghcr.io/SEU-USUARIO   # sobrescrito pela pipeline
+docker_tag: "1.0.0"
+pull_images: false                     # true = força baixar a tag de novo (tags mutáveis, ex.: latest)
+
+# ---- MongoDB
+mongo_image: mongo
+mongo_tag: "8.0.17"
+mongo_cache_gb: "0.25"
+mongo_database: kubeshop
+mongo_app_user: kubeshop
+mongo_root_user: admin
+mongo_root_password: "{{ lookup('ansible.builtin.env', 'MONGO_ROOT_PASSWORD') }}"
+mongo_app_password: "{{ lookup('ansible.builtin.env', 'MONGO_APP_PASSWORD') }}"
+
+# ---- Caminhos nas VMs
+kubeshop_base_dir: /opt/kubeshop
+mongo_data_mount: /srv/mongo
