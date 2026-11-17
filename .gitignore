@@ -1,0 +1,21 @@
+# Terraform
+terraform/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+plan.txt
+crash.log
+
+# Ansible (gerados pela pipeline)
+ansible/inventory/hosts.yml
+ansible/pipeline-vars.json
+ansible/ansible.log
+backups/
+restore/
+
+# Segredos: nunca versionar
+*.pem
+id_*
+.env
+.secrets/
