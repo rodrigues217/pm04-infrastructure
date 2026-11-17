@@ -1,0 +1,49 @@
+# Reinício controlado. restart_target: all | app | db
+# Banco primeiro; a aplicação só reinicia depois que o banco estiver saudável.
+- name: Reiniciar MongoDB
+  hosts: db
+  become: true
+  tasks:
+    - name: Reiniciar contêiner mongodb
+      community.docker.docker_container:
+        name: mongodb
+        state: started
+        restart: true
+      when: restart_target | default('all') in ['all', 'db']
+
+    - name: Aguardar MongoDB healthy
+      community.docker.docker_container_info:
+        name: mongodb
+      register: info
+      until: info.container.State.Health.Status | default('') == 'healthy'
+      retries: 36
+      delay: 5
+
+- name: Reiniciar aplicação
+  hosts: app
+  become: true
+  tasks:
+    - name: Reiniciar API e frontend
+      community.docker.docker_container:
+        name: "{{ item }}"
+        state: started
+        restart: true
+      loop: [kubeshop-api, kubeshop-frontend]
+      when: restart_target | default('all') in ['all', 'app']
+
+    - name: Aguardar contêineres healthy
+      community.docker.docker_container_info:
+        name: "{{ item }}"
+      register: info
+      until: info.container.State.Health.Status | default('') == 'healthy'
+      retries: 30
+      delay: 5
+      loop: [kubeshop-api, kubeshop-frontend]
+
+    - name: Confirmar a API com banco pelo Nginx
+      ansible.builtin.uri:
+        url: http://127.0.0.1/api/health/ready
+      register: ready
+      until: ready.status == 200
+      retries: 10
+      delay: 3

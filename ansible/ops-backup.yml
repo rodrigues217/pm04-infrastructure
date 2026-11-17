@@ -1,0 +1,42 @@
+# Backup: mongodump compactado gerado no volume de dados e trazido para o runner.
+# A pipeline envia o arquivo ao bucket S3 de backups (fora do ciclo de vida das VMs).
+# Variável: backup_dir_local (pasta no runner, padrão ../backups)
+- name: Backup do MongoDB
+  hosts: db
+  become: true
+  vars:
+    backup_dir_local: "{{ playbook_dir }}/../backups"
+  tasks:
+    # set_fact fixa o horário uma única vez (variáveis em "vars" são reavaliadas a cada uso).
+    - name: Definir nome do arquivo de backup
+      ansible.builtin.set_fact:
+        backup_file: "kubeshop-{{ env_name }}-{{ now(utc=true, fmt='%Y%m%dT%H%M%SZ') }}.archive.gz"
+
+    - name: Gerar dump do banco kubeshop
+      community.docker.docker_container_exec:
+        container: mongodb
+        argv:
+          - sh
+          - -c
+          - >-
+            mongodump --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$(cat $MONGO_INITDB_ROOT_PASSWORD_FILE)"
+            --authenticationDatabase admin --db kubeshop --gzip --archive=/backup/{{ backup_file }}
+
+    - name: Trazer o arquivo para o runner
+      ansible.builtin.fetch:
+        src: "{{ mongo_data_mount }}/backup/{{ backup_file }}"
+        dest: "{{ backup_dir_local }}/"
+        flat: true
+
+    - name: Remover a cópia temporária da VM
+      ansible.builtin.file:
+        path: "{{ mongo_data_mount }}/backup/{{ backup_file }}"
+        state: absent
+
+    - name: Registrar nome do backup para a pipeline
+      ansible.builtin.copy:
+        dest: "{{ backup_dir_local }}/LAST_BACKUP"
+        content: "{{ backup_file }}"
+        mode: "0644"
+      delegate_to: localhost
+      become: false

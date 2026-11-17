@@ -1,0 +1,33 @@
+# Diagnóstico: últimas linhas de log de cada contêiner e uso de recursos.
+- name: Logs e diagnóstico
+  hosts: all
+  become: true
+  vars:
+    log_lines: 150
+    log_containers:
+      db: [mongodb]
+      app: [kubeshop-api, kubeshop-frontend]
+  tasks:
+    - name: Coletar logs dos contêineres
+      ansible.builtin.command: docker logs --tail {{ log_lines }} --timestamps {{ item }}
+      loop: "{{ log_containers[group_names[0]] }}"
+      register: logs
+      changed_when: false
+
+    - name: Exibir logs
+      ansible.builtin.debug:
+        msg: "{{ (item.stdout_lines + item.stderr_lines) }}"
+      loop: "{{ logs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Uso de CPU, memória e disco
+      ansible.builtin.shell: |
+        docker stats --no-stream --format 'table {% raw %}{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}{% endraw %}'
+        echo; free -h; echo; df -h / {{ mongo_data_mount if 'db' in group_names else '' }}
+      register: resources
+      changed_when: false
+
+    - name: Exibir recursos
+      ansible.builtin.debug:
+        var: resources.stdout_lines

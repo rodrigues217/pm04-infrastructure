@@ -1,0 +1,111 @@
+# Restauração de backup. Variáveis:
+#   restore_archive: caminho do .archive.gz no runner (baixado do S3 pela pipeline)
+#   restore_mode:    test (padrão) | production
+#
+# test       -> restaura em um MongoDB TEMPORÁRIO e isolado (sem rede, dados em tmpfs),
+#               compara a contagem de documentos e descarta. Não toca no banco principal.
+# production -> substitui os dados do banco principal (mongorestore --drop).
+#               A pipeline exige confirmação explícita e faz um backup antes.
+- name: Restaurar backup do MongoDB
+  hosts: db
+  become: true
+  vars:
+    restore_mode: test
+    count_js: 'db.getCollectionNames().map(c => c + "=" + db[c].countDocuments()).join(", ") || "(vazio)"'
+  tasks:
+    - name: Validar parâmetros
+      ansible.builtin.assert:
+        that:
+          - restore_archive is defined
+          - restore_mode in ['test', 'production']
+
+    - name: Enviar arquivo de backup para a VM
+      ansible.builtin.copy:
+        src: "{{ restore_archive }}"
+        dest: "{{ mongo_data_mount }}/backup/restore.archive.gz"
+        owner: "999"
+        group: "999"
+        mode: "0400"
+
+    # ------------------------------------------------ modo teste (isolado)
+    - name: Teste de restauração em ambiente isolado
+      when: restore_mode == 'test'
+      block:
+        - name: Subir MongoDB temporário sem rede e sem autenticação
+          community.docker.docker_container:
+            name: mongo-restore-test
+            image: "{{ mongo_image }}:{{ mongo_tag }}"
+            state: started
+            network_mode: none
+            tmpfs: ["/data/db:size=512m"]
+            volumes:
+              - "{{ mongo_data_mount }}/backup/restore.archive.gz:/restore.archive.gz:ro"
+            command: ["--bind_ip", "127.0.0.1"]
+
+        - name: Aguardar o MongoDB temporário aceitar conexões
+          community.docker.docker_container_exec:
+            container: mongo-restore-test
+            argv: [mongosh, --quiet, --eval, "db.runCommand({ping:1}).ok"]
+          register: ping
+          until: ping.rc == 0
+          retries: 20
+          delay: 3
+          changed_when: false
+
+        - name: Restaurar o backup no MongoDB temporário
+          community.docker.docker_container_exec:
+            container: mongo-restore-test
+            argv: [mongorestore, --quiet, --gzip, --archive=/restore.archive.gz]
+
+        - name: Contar documentos restaurados
+          community.docker.docker_container_exec:
+            container: mongo-restore-test
+            argv: [mongosh, --quiet, kubeshop, --eval, "{{ count_js }}"]
+          register: restored_counts
+          changed_when: false
+
+        - name: Contar documentos no banco principal (somente leitura)
+          community.docker.docker_container_exec:
+            container: mongodb
+            argv:
+              - sh
+              - -c
+              - >-
+                mongosh --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$(cat $MONGO_INITDB_ROOT_PASSWORD_FILE)"
+                --authenticationDatabase admin kubeshop --eval '{{ count_js }}'
+          register: live_counts
+          changed_when: false
+
+        - name: Resultado do teste de restauração
+          ansible.builtin.debug:
+            msg:
+              - "Backup restaurado (isolado): {{ restored_counts.stdout }}"
+              - "Banco principal (agora):     {{ live_counts.stdout }}"
+              - "Restauração validada: o backup é legível e contém os pedidos. O banco principal não foi alterado."
+
+        - name: Falhar se o backup não tiver a coleção de pedidos
+          ansible.builtin.assert:
+            that: "'orders=' in restored_counts.stdout"
+            fail_msg: "O backup restaurado não contém a coleção orders."
+      always:
+        - name: Remover o MongoDB temporário
+          community.docker.docker_container:
+            name: mongo-restore-test
+            state: absent
+
+    # ------------------------------------------------ modo produção
+    - name: Restaurar no banco principal (substitui os dados atuais)
+      community.docker.docker_container_exec:
+        container: mongodb
+        argv:
+          - sh
+          - -c
+          - >-
+            mongorestore --quiet --drop -u "$MONGO_INITDB_ROOT_USERNAME" -p "$(cat $MONGO_INITDB_ROOT_PASSWORD_FILE)"
+            --authenticationDatabase admin --nsInclude 'kubeshop.*' --gzip --archive=/backup/restore.archive.gz
+      when: restore_mode == 'production'
+
+    - name: Remover o arquivo de restauração da VM
+      ansible.builtin.file:
+        path: "{{ mongo_data_mount }}/backup/restore.archive.gz"
+        state: absent

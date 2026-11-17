@@ -1,0 +1,75 @@
+# Consulta de saúde: estado dos contêineres, health checks, isolamento do banco
+# e teste funcional (smoke test do próprio KubeShop: cria e consulta um pedido).
+- name: Saúde do banco
+  hosts: db
+  become: true
+  tasks:
+    - name: Estado do contêiner MongoDB
+      community.docker.docker_container_info:
+        name: mongodb
+      register: mongo
+      failed_when: not mongo.exists or mongo.container.State.Health.Status != 'healthy'
+
+    - name: Contagem de documentos (prova de persistência)
+      community.docker.docker_container_exec:
+        container: mongodb
+        argv:
+          - sh
+          - -c
+          - >-
+            mongosh --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$(cat $MONGO_INITDB_ROOT_PASSWORD_FILE)"
+            --authenticationDatabase admin kubeshop
+            --eval 'db.getCollectionNames().map(c => c + "=" + db[c].countDocuments()).join(", ") || "(vazio)"'
+      register: counts
+      changed_when: false
+
+    - name: Resultado do banco
+      ansible.builtin.debug:
+        msg: "MongoDB {{ mongo.container.Config.Image }} healthy | coleções: {{ counts.stdout }}"
+
+- name: Saúde da aplicação
+  hosts: app
+  become: true
+  tasks:
+    - name: Estado dos contêineres
+      community.docker.docker_container_info:
+        name: "{{ item }}"
+      register: app
+      failed_when: not app.exists or app.container.State.Health.Status != 'healthy'
+      loop: [kubeshop-api, kubeshop-frontend]
+
+    - name: Versão publicada
+      ansible.builtin.uri:
+        url: http://127.0.0.1/api/info
+        return_content: true
+      register: info
+
+    - name: Teste funcional (smoke test do KubeShop)
+      community.docker.docker_container_exec:
+        container: kubeshop-api
+        argv: [node, /app/scripts/smoke.mjs, "http://frontend:8080"]
+      register: smoke
+      changed_when: false
+
+    - name: A porta do MongoDB NÃO pode responder pelo IP público do banco
+      ansible.builtin.wait_for:
+        host: "{{ hostvars['db-vm'].db_public_ip | default('') }}"
+        port: 27017
+        timeout: 5
+      register: public_mongo
+      failed_when: public_mongo is succeeded
+      when: hostvars['db-vm'].db_public_ip | default('') | length > 0
+
+    - name: A porta do MongoDB responde pela rede privada
+      ansible.builtin.wait_for:
+        host: "{{ db_private_ip }}"
+        port: 27017
+        timeout: 5
+
+    - name: Resultado da aplicação
+      ansible.builtin.debug:
+        msg:
+          - "Versão: {{ info.json.version }}"
+          - "Contêineres: {{ app.results | map(attribute='container.Config.Image') | join(', ') }}"
+          - "Smoke test: {{ smoke.stdout }}"
+          - "Loja: http://{{ app_public_ip }}"
