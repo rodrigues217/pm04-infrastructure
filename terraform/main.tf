@@ -21,12 +21,15 @@ resource "aws_key_pair" "deploy" {
 
 # ---------------------------------------------------------------- VM 1: aplicação
 resource "aws_instance" "app" {
-  ami                         = data.aws_ami.ubuntu.id
-  instance_type               = var.app_instance_type
-  subnet_id                   = aws_subnet.public.id
-  vpc_security_group_ids      = [aws_security_group.app.id]
-  key_name                    = aws_key_pair.deploy.key_name
-  associate_public_ip_address = false # o IP público é o Elastic IP abaixo
+  ami                    = data.aws_ami.ubuntu.id
+  instance_type          = var.app_instance_type
+  subnet_id              = aws_subnet.public.id
+  vpc_security_group_ids = [aws_security_group.app.id]
+  key_name               = aws_key_pair.deploy.key_name
+  # Sem associate_public_ip_address: o IP público é o Elastic IP abaixo, e a
+  # sub-rede já não atribui IP automático. Declarar "false" aqui faria o Terraform
+  # recriar a VM a cada plano, porque a AWS passa a reportar "true" depois que o
+  # Elastic IP é associado.
 
   metadata_options {
     http_tokens = "required" # IMDSv2
