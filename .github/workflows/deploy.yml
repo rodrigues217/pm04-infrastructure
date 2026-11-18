@@ -253,7 +253,8 @@ jobs:
       - name: Verificar se o ambiente existe
         id: exists
         run: |
-          if terraform -chdir=terraform output -raw app_public_ip >/dev/null 2>&1; then
+          APP_IP="$(terraform -chdir=terraform output -json | jq -r '.app_public_ip.value // empty')"
+          if [ -n "$APP_IP" ]; then
             echo "up=true" >> "$GITHUB_OUTPUT"
             bash scripts/gerar-inventario.sh
             echo "SG_ID=$(terraform -chdir=terraform output -raw app_security_group_id)" >> "$GITHUB_ENV"

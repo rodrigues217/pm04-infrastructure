@@ -74,7 +74,8 @@ jobs:
       - name: Localizar o ambiente (outputs do Terraform)
         id: env
         run: |
-          if ! terraform -chdir=terraform output -raw app_public_ip >/dev/null 2>&1; then
+          APP_IP="$(terraform -chdir=terraform output -json | jq -r '.app_public_ip.value // empty')"
+          if [ -z "$APP_IP" ]; then
             echo "Ambiente $TARGET_ENV não existe; nada a fazer."
             echo "up=false" >> "$GITHUB_OUTPUT"
             exit 0
