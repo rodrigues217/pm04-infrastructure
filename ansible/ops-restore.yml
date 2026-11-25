@@ -55,7 +55,7 @@
         - name: Restaurar o backup no MongoDB temporário
           community.docker.docker_container_exec:
             container: mongo-restore-test
-            argv: [mongorestore, --quiet, --gzip, --archive=/restore.archive.gz]
+            argv: [mongorestore, --gzip, --archive=/restore.archive.gz]
 
         - name: Contar documentos restaurados
           community.docker.docker_container_exec:
