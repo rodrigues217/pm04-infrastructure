@@ -40,7 +40,8 @@
             tmpfs: ["/data/db:size=512m"]
             volumes:
               - "{{ mongo_data_mount }}/backup/restore.archive.gz:/restore.archive.gz:ro"
-            command: ["--bind_ip", "127.0.0.1"]
+            # tmpfs pequeno (512 MB): libera a criação de índices, que por padrão exige 500 MB livres
+            command: ["--bind_ip", "127.0.0.1", "--setParameter", "indexBuildMinAvailableDiskSpaceMB=0"]
 
         - name: Aguardar o MongoDB temporário aceitar conexões
           community.docker.docker_container_exec:
