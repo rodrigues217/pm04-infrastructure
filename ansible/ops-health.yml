@@ -1,5 +1,6 @@
-# Consulta de saúde: estado dos contêineres, health checks, isolamento do banco
-# e teste funcional (smoke test do próprio KubeShop: cria e consulta um pedido).
+# Consulta de saúde: estado dos contêineres, health checks e isolamento do banco.
+# Somente leitura por padrão. Com run_smoke=true (usado pelo deploy) também roda o
+# smoke test do KubeShop, que CRIA um pedido fictício e o consulta.
 - name: Saúde do banco
   hosts: db
   become: true
@@ -44,12 +45,19 @@
         return_content: true
       register: info
 
-    - name: Teste funcional (smoke test do KubeShop)
+    - name: Teste funcional (smoke test do KubeShop; cria um pedido)
       community.docker.docker_container_exec:
         container: kubeshop-api
         argv: [node, /app/scripts/smoke.mjs, "http://frontend:8080"]
       register: smoke
       changed_when: false
+      when: run_smoke | default(false) | bool
+
+    - name: Leitura do catálogo e do histórico pelo Nginx (sem gravar)
+      ansible.builtin.uri:
+        url: "http://127.0.0.1{{ item }}"
+        status_code: 200
+      loop: [/, /api/health/ready, /api/products, /api/orders]
 
     - name: A porta do MongoDB NÃO pode responder pelo IP público do banco
       ansible.builtin.wait_for:
@@ -71,5 +79,5 @@
         msg:
           - "Versão: {{ info.json.version }}"
           - "Contêineres: {{ app.results | map(attribute='container.Config.Image') | join(', ') }}"
-          - "Smoke test: {{ smoke.stdout }}"
+          - "Smoke test: {{ smoke.stdout if (smoke.stdout is defined) else 'não executado (consulta somente leitura)' }}"
           - "Loja: http://{{ app_public_ip }}"

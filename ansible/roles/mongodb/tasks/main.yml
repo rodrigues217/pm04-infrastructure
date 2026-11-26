@@ -22,6 +22,29 @@
     opts: defaults,nofail
     state: mounted
 
+# Com "nofail" o systemd não ordena a montagem antes do Docker. Sem esta
+# dependência, após um stop/start ou reboot o MongoDB poderia subir sobre a
+# pasta vazia do disco do sistema em vez do volume EBS.
+- name: Criar diretório de ajustes do serviço Docker
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    mode: "0755"
+
+- name: Docker só inicia com o volume de dados montado
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/docker.service.d/10-mongo-data.conf
+    mode: "0644"
+    content: |
+      [Unit]
+      RequiresMountsFor={{ mongo_data_mount }}
+  register: docker_mount_dep
+
+- name: Recarregar o systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: docker_mount_dep is changed
+
 - name: Criar diretórios de dados e backup (dono = usuário mongodb do contêiner, uid 999)
   ansible.builtin.file:
     path: "{{ mongo_data_mount }}/{{ item }}"

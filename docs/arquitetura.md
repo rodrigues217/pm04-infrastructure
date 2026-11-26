@@ -65,7 +65,7 @@ a API no mesmo host. Somente a API acessa o MongoDB, pela rede privada da VPC.
 | REQ-02 Banco isolado | MongoDB só na VM 2. Porta publicada só no IP privado. O security group do banco não tem regra de entrada para a internet |
 | REQ-03 Rede privada | A regra de entrada da 27017 aceita apenas o security group da VM 1. A API usa o IP privado. Procedimento administrativo: [acesso-administrativo.md](acesso-administrativo.md) |
 | REQ-04 Acessos | SSH por chave. Banco só via VM 1. A porta 22 da VM 1 é aberta para o IP do runner durante a execução e fechada ao final. Senhas e chaves em GitHub Secrets, gravadas nas VMs com permissão 0400 e `no_log` no Ansible |
-| REQ-05 Persistência | Volume EBS dedicado em `/srv/mongo`. Troca de `instance_type` é feita no lugar (stop/start), sem recriar VM nem volume |
+| REQ-05 Persistência | Volume EBS dedicado em `/srv/mongo`. Troca do tipo das VMs (`instance_type` e `DB_INSTANCE_TYPE`) é feita no lugar (stop/start), sem recriar VM nem volume. O Docker da VM 2 só inicia com o volume montado (`RequiresMountsFor`), então o MongoDB nunca sobe sobre um diretório vazio após reinício |
 
 ## 3. Decisões técnicas
 
@@ -107,7 +107,21 @@ a API no mesmo host. Somente a API acessa o MongoDB, pela rede privada da VPC.
 - As imagens precisam ser públicas no registro; as VMs não autenticam no GHCR.
 - Trocar as senhas do MongoDB depois da primeira inicialização exige atualizar os usuários
   no banco. O script de criação de usuário só roda com o disco vazio.
-- A VM do banco tem IP público de saída quando a NAT Gateway está desligada.
+- A VM do banco tem IP público de saída quando a NAT Gateway está desligada. Não há regra
+  de entrada pública e o MongoDB escuta só no IP privado; a NAT Gateway (opcional,
+  `ENABLE_NAT_GATEWAY=true`) custaria mais que o restante do ambiente.
+- A política IAM da pipeline libera `ec2:*`, restrita à região us-east-1. Em produção, o
+  ideal é listar apenas as ações EC2 usadas pelo Terraform e pelos scripts.
+- O Ansible não verifica a identidade SSH das VMs (`StrictHostKeyChecking=no`): as VMs mudam
+  de identidade a cada recriação e os runners são descartáveis. O acesso é só por chave e a
+  porta 22 fica aberta apenas durante a execução, para o IP do runner.
+- Trocar o secret `SSH_PRIVATE_KEY` com o ambiente já criado corta o acesso do Ansible: a
+  AWS só instala a chave pública na criação da VM. Para rotacionar, é preciso adicionar a
+  nova chave em `~/.ssh/authorized_keys` das VMs antes de trocar o secret, ou recriar o
+  ambiente (destroy + apply + `restore-production`).
+- Cada deploy grava um pedido fictício (smoke test do KubeShop), que prova a gravação no
+  banco ao final da implantação. Aceitável porque a loja só tem pedidos fictícios.
+- O backup agendado cobre um ambiente por vez (`SCHEDULED_BACKUP_ENV`).
 
 ## 5. Estimativa de custo mensal
 

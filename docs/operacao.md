@@ -77,6 +77,9 @@ O deploy executa, nesta ordem: buckets de state e backup → `terraform fmt/vali
 dos outputs → SSH aberto para o runner → playbook (SO, Docker, MongoDB, aplicação) → teste
 de saúde e smoke test → teste da porta 27017 pela internet → SSH fechado (mesmo com erro).
 
+O smoke test do KubeShop cria e consulta um pedido fictício: **cada deploy soma um pedido**
+ao histórico. As rotinas de operação não gravam dados.
+
 ## 3. Rotinas do dia a dia
 
 Não removem dados.
@@ -87,8 +90,10 @@ Não removem dados.
 | Criar ou atualizar | Deploy, `action=apply` | `PLAY RECAP` com `failed=0` e URL da loja no resumo | rodar de novo; se persistir, Operação `logs` |
 | Nova versão | Deploy, `docker_tag=<nova>` | `/api/info` com a nova versão | Deploy com a tag anterior |
 | Atualizar o SO | Deploy, `update_os=true` | pacotes atualizados, reinício se necessário | Operação `health` e `logs` |
+| Mudar o tamanho da VM da aplicação | Deploy, `instance_type=<tipo>`; depois a variável `APP_INSTANCE_TYPE` com o mesmo valor | plano `1 to change` (in-place); VM parada e religada, mesmo ID e mesmo IP da loja | Deploy com o tipo anterior |
+| Mudar o tamanho da VM do banco | variável `DB_INSTANCE_TYPE` do ambiente; depois Deploy `apply` | plano `1 to change` (in-place); MongoDB volta com o mesmo volume e os mesmos pedidos. A loja fica indisponível por 1 a 2 minutos | voltar a variável e rodar `apply` |
 | Inventário | Operação, `inventory` | outputs, recursos no state, VMs e volumes | conferir se o ambiente existe |
-| Saúde | Operação, `health` | contêineres `healthy`, contagem de documentos, smoke test `PASS`, 27017 fechada pela internet e aberta pela rede privada | Operação `logs` |
+| Saúde | Operação, `health` | contêineres `healthy`, contagem de documentos, loja/catálogo/histórico respondendo, 27017 fechada pela internet e aberta pela rede privada. Somente leitura | Operação `logs` |
 | Logs | Operação, `logs` | 150 linhas por contêiner, CPU, memória e disco | — |
 | Reiniciar | Operação, `restart`, `restart_target=all/app/db` | serviços `healthy`; banco reinicia antes da aplicação | `logs`; depois Deploy `apply` |
 | Backup | Operação, `backup` (também diário às 03:00) | arquivo em `s3://kubeshop-backups-<conta>-<região>/<ambiente>/` | `logs` (espaço em disco) |
@@ -102,6 +107,7 @@ Exigem confirmação digitada.
 |---|---|---|
 | Restaurar no banco principal | Operação, `restore-production`, `confirm=RESTAURAR <ambiente>` | backup de segurança; substitui os dados pelo backup escolhido (vazio = o anterior ao de segurança); reinicia a API; teste de saúde |
 | Desativar ambiente | Deploy, `action=destroy`, `confirm_destroy=<ambiente>` | backup final no S3 e remoção dos recursos do ambiente (seção 6) |
+| Desativar ambiente quebrado | Deploy, `action=destroy`, `confirm_destroy=<ambiente> sem-backup` | somente quando o MongoDB está inacessível e o backup final falha: remove os recursos **sem** backup final; os dados posteriores ao último backup são perdidos |
 
 ## 5. Recuperação em caso de falha
 
@@ -117,6 +123,11 @@ Exigem confirmação digitada.
 ## 6. Desativação
 
 Deploy → `action=destroy`, `confirm_destroy=<ambiente>`.
+
+Se o backup final falhar porque o banco está inacessível, o destroy é interrompido antes de
+remover qualquer recurso. Para desativar mesmo assim, confira em
+`s3://kubeshop-backups-.../<ambiente>/` qual é o último backup e rode de novo com
+`confirm_destroy=<ambiente> sem-backup`.
 
 | Item | Destino |
 |---|---|
@@ -177,6 +188,8 @@ rode Deploy → `apply` para recriar e `restore-production` com o último backup
 | API não fica `healthy` / `/api/health/ready` 503 | API sem acesso ao banco | `health` (teste da 27017 pela rede privada) e `logs` |
 | `A porta 27017 respondeu pela internet!` | regra de entrada indevida no SG do banco | remover a regra no console e rodar `apply` |
 | `Nenhum backup encontrado` | backup ainda não executado no ambiente | rodar `backup` |
+| destroy falha no "Backup final" | MongoDB fora do ar | `logs`; se não houver recuperação, destroy com `confirm_destroy=<ambiente> sem-backup` |
+| `UNREACHABLE` após trocar o secret `SSH_PRIVATE_KEY` | a AWS só instala a chave na criação da VM | voltar o secret anterior (ver limitações em [arquitetura.md](arquitetura.md#4-limitações)) |
 
 ## 9. Credenciais nos registros
 

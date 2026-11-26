@@ -44,7 +44,7 @@ on:
         type: string
         default: "curl, git, unzip"
       confirm_destroy:
-        description: "Para destroy, digite o nome do ambiente (ex.: dev)"
+        description: "Para destroy, digite o ambiente (ex.: dev). Ambiente quebrado, sem backup final: 'dev sem-backup'"
         type: string
         default: ""
 
@@ -207,7 +207,7 @@ jobs:
 
       - name: Verificação final (saúde + teste funcional)
         working-directory: ansible
-        run: ansible-playbook ops-health.yml -e @pipeline-vars.json
+        run: ansible-playbook ops-health.yml -e @pipeline-vars.json -e run_smoke=true
 
       - name: Evidência - MongoDB inacessível pela internet
         run: |
@@ -233,9 +233,9 @@ jobs:
       MONGO_APP_PASSWORD: ${{ secrets.MONGO_APP_PASSWORD }}
     steps:
       - name: Conferir confirmação
-        if: inputs.confirm_destroy != inputs.environment
+        if: inputs.confirm_destroy != inputs.environment && inputs.confirm_destroy != format('{0} sem-backup', inputs.environment)
         run: |
-          echo "::error::Para destruir, preencha confirm_destroy com '${{ inputs.environment }}'."
+          echo "::error::Para destruir, preencha confirm_destroy com '${{ inputs.environment }}' (ou '${{ inputs.environment }} sem-backup' se o banco estiver inacessível)."
           exit 1
 
       - uses: actions/checkout@v4
@@ -262,8 +262,14 @@ jobs:
             echo "up=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Backup final ignorado (confirmado com sem-backup)
+        if: steps.exists.outputs.up == 'true' && inputs.confirm_destroy != inputs.environment
+        run: |
+          echo "::warning::Destroy sem backup final: os dados atuais do MongoDB serão perdidos. Último backup disponível em s3://$BACKUP_BUCKET/${{ inputs.environment }}/"
+          echo "**Sem backup final** (confirm_destroy = '${{ inputs.confirm_destroy }}'). Backups anteriores: s3://$BACKUP_BUCKET/${{ inputs.environment }}/" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Backup final antes de destruir
-        if: steps.exists.outputs.up == 'true'
+        if: steps.exists.outputs.up == 'true' && inputs.confirm_destroy == inputs.environment
         run: |
           bash scripts/ssh-access.sh open "$SG_ID"
           cd ansible
@@ -273,7 +279,7 @@ jobs:
           echo "Backup final: s3://$BACKUP_BUCKET/${{ inputs.environment }}/$FILE" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fechar SSH temporário
-        if: always() && steps.exists.outputs.up == 'true'
+        if: always() && steps.exists.outputs.up == 'true' && inputs.confirm_destroy == inputs.environment
         run: bash scripts/ssh-access.sh close "$SG_ID" || true
 
       - name: terraform destroy
