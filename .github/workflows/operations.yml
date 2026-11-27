@@ -27,7 +27,7 @@ on:
         type: string
         default: ""
   schedule:
-    - cron: "0 6 * * *" # backup diário, 03:00 em Brasília
+    - cron: "*/15 * * * *" # temporário para a validação; padrão: "0 6 * * *" (03:00 em Brasília)
 
 permissions:
   contents: read
