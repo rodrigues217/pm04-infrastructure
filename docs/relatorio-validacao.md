@@ -23,7 +23,7 @@ Evidências em [evidencias/](../evidencias/). Base dos links:
 | ACE-06 CI/CD | `01`, `10`; [integracao-cicd.md](integracao-cicd.md) | [45939581276](https://github.com/rodrigues217/pm04-infrastructure/actions/runs/45939581276) | Atendido: imagens publicadas com tag e implantadas pelo parâmetro `docker_tag` |
 | ACE-07 Recuperação | `13`, `14`, `15`, `16` | [45659961552](https://github.com/rodrigues217/pm04-infrastructure/actions/runs/45659961552), [45942551414](https://github.com/rodrigues217/pm04-infrastructure/actions/runs/45942551414) | Atendido: backup agendado no S3; restauração testada com `orders=4` no backup e no banco |
 | ACE-08 Administração | `06`, `12`, `17`; [operacao.md](operacao.md) | [45943204935](https://github.com/rodrigues217/pm04-infrastructure/actions/runs/45943204935) | Atendido: rotinas e desativação pela pipeline; senhas fora do código e dos logs |
-| ACE-09 Custos | [arquitetura.md, seção 5](arquitetura.md#5-estimativa-de-custo-mensal) | — | Atendido |
+| ACE-09 Custos | `18`; [arquitetura.md, seção 5](arquitetura.md#5-estimativa-de-custo-mensal) | [calculadora AWS](https://calculator.aws/#/estimate?id=72767dcfd4952808d7be8ab7fe59e32a9caebae1) | Atendido: US$ 24,90/mês, conferido na AWS Pricing Calculator |
 | ACE-10 Transferência | [operacao.md](operacao.md), [inventario.md](inventario.md), [acesso-administrativo.md](acesso-administrativo.md) | — | Atendido |
 
 ## Cenários do enunciado PM-04
@@ -55,6 +55,7 @@ Evidências em [evidencias/](../evidencias/). Base dos links:
 | 15 | `15-backups-s3.png` | console AWS | backups diários no bucket `kubeshop-backups`, incluindo o arquivo do print 14 |
 | 16 | `16-restore-test.png` | operação #28 | `orders=4` no backup restaurado e no banco principal |
 | 17 | `17-destroy.png` | deploy #15 | `Destroy complete! Resources: 23 destroyed` |
+| 18 | `18-calculadora-aws.png` | AWS Pricing Calculator | EC2 16,78 + EBS 0,80 + IPv4 7,30 + S3 0,02 = US$ 24,90/mês |
 
 ## Procedimento executado
 

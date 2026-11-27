@@ -145,21 +145,27 @@ a API no mesmo host. Somente a API acessa o MongoDB, pela rede privada da VPC.
 | Discos do sistema | 2 × gp3 10 GB | 20 GB × 0,08 | 1,60 |
 | Volume do MongoDB | gp3 10 GB | 10 GB × 0,08 | 0,80 |
 | IPv4 públicos | Elastic IP da VM 1 + IP de saída da VM 2 | 2 × 730 h × 0,005 | 7,30 |
-| S3 | state + 14 backups diários (< 1 GB, incluindo versões) | | 0,05 |
+| S3 | state + 14 backups diários (< 1 GB, incluindo versões) | 1 GB × 0,023 + requisições | 0,02 |
 | Transferência de saída | até 100 GB/mês sem cobrança | | 0,00 |
 | Logs | rotação local no Docker + logs do GitHub Actions; sem CloudWatch | | 0,00 |
 | GitHub Actions | ~150 min/mês (backup diário + deploys); repositório público | | 0,00 |
 | GHCR | pacotes públicos | | 0,00 |
-| **Total** | | | **24,93** |
+| **Total** | | | **24,90** (298,80 em 12 meses) |
+
+Os valores de EC2, EBS, IPv4 e S3 foram conferidos na AWS Pricing Calculator, que chega ao
+mesmo total de US$ 24,90/mês ([estimativa](https://calculator.aws/#/estimate?id=72767dcfd4952808d7be8ab7fe59e32a9caebae1),
+print em [evidencias/18-calculadora-aws.png](../evidencias/18-calculadora-aws.png)).
 
 Variações:
 
 - Com NAT Gateway: + 32,85 (730 h × 0,045) + 0,045/GB processado − 3,65 (IP de saída do banco) ≈ **US$ 54/mês**.
 - Banco em t3.small: + 7,59 ≈ **US$ 32,50/mês**.
+- As duas VMs em t3.small (tamanho usado no teste de alteração): + 15,18 ≈ **US$ 40/mês**.
 - Repositório privado: o GitHub Free inclui 2.000 min/mês; acima disso, US$ 0,008/min.
 
 ### Fontes
 
+- AWS Pricing Calculator, estimativa de 27/11/2026: https://calculator.aws/#/estimate?id=72767dcfd4952808d7be8ab7fe59e32a9caebae1
 - EC2 on-demand: https://aws.amazon.com/ec2/pricing/on-demand/
 - EBS: https://aws.amazon.com/ebs/pricing/
 - IPv4 público: https://aws.amazon.com/vpc/pricing/
