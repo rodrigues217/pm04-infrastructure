@@ -1,7 +1,7 @@
 # Evidências
 
-Prints das execuções, numerados conforme o
-[relatório de validação](../docs/relatorio-validacao.md) (`01-imagens.png` a
-`31-aws-pos-destroy.png`).
+Prints das execuções de validação, de `01-imagens-publicadas.png` a `17-destroy.png`, na
+ordem em que os testes foram feitos. A descrição de cada um, a execução de origem e o
+critério que comprova estão no [relatório de validação](../docs/relatorio-validacao.md).
 
-Nenhum print pode mostrar valores de secrets, chaves ou senhas.
+Nenhum print mostra valores de secrets, chaves ou senhas.
